@@ -1,0 +1,58 @@
+---------------------------------------------------------------------------------------------------
+Version: 0.0.8
+Date: 11.4.2019
+  Changes:
+    - Added an ingredients cap difficulty setting
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.7
+Date: 11.4.2019
+  Changes:
+    - Factorio 0.18.18
+    - lib v0.0.13
+    - Fixed a bug with assemblers occasionally needing ingredients that are only produced by itself (untested)
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.6
+Date: 30.11.2019
+  Changes:
+    - Tidying
+    - Compatability improvements
+    - Spaceblock compatability
+    - Added setting to enable/disable randomizing spaceblock bootstrap and duplication recipes
+    - lib v0.0.9
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.5
+Date: 30.11.2019
+  Changes:
+    - Difficulty settings
+    - Seablock Compatability
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.4
+Date: 30.11.2019
+  Changes:
+    - Library updates.
+    - Reworked, rebuilt and reorganized the randomization stepper, randomizer logic, and roll tables, now relying far less on transmutation to finish randomizing seeds.
+    - These changes should result in seeds that are more reliable in terms of progression and technology/difficulty curves
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.3
+Date: 8.11.2019
+  Changes:
+    - Logic tweaks and improvements
+    - Thumbnail
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.2
+Date: 8.11.2019
+  Changes:
+    - HUGE update to randomization logic.
+
+
+---------------------------------------------------------------------------------------------------
+Version: 0.0.1
+Date: 1.11.2019
+  Changes:
+    - lol
