@@ -364,6 +364,333 @@ if(settings.startup.randotorio_spaceblock.value==false)then
 	logic.spaceblock=true -- ignore recipes. it's backwards because it makes sense in the menu.
 end
 
+--== REWRITE ==--
+
+rando.queued = {}
+rando.unaffordable_queued = {}
+rando.unaffordable_recipe_queue = {}
+rando.recipe_queue = {}
+rando.thing_number = {}
+rando.thing_cost = {}
+rando.thing_automatable = {}
+rando.item_selected_times = {}
+rando.fluid_selected_times = {}
+rando.is_raw_resource = {}
+rando.used_one_ingredient_recipes = {}
+rando.total_things = 0
+
+function logic.HandChanged(src,e)
+	if (src == "recipe" and not rando.queued[e.name]) then
+		if (not logic.Ignoring(e)) then
+			if (logic.CanAffordRecipe(e) and logic.CanCraftRecipe(e)) then
+				rando.queued[e.name] = true
+				table.insert(rando.recipe_queue, e)
+			else
+				if (not rando.unaffordable_queued[e.name]) then
+					rando.unaffordable_queued[e.name] = true
+					table.insert(rando.unaffordable_recipe_queue, e)
+				end
+			end
+		end
+	end
+	if ((src == "item" or src == "fluid") and not rando.thing_number[src .. ":" .. e.name]) then
+		local thing_id = src .. ":" .. e.name
+		if (not rando.thing_cost[thing_id]) then
+			rando.is_raw_resource[thing_id] = true
+			if (src == "item") then
+				rando.thing_cost[thing_id] = 1 -- 1 item = 1 cost
+				rando.thing_automatable[thing_id] = false
+			else
+				rando.thing_cost[thing_id] = 0.05 -- 20 fluid = 1 cost
+				rando.thing_automatable[thing_id] = true
+			end
+		end
+
+		if (src == "item") then
+			rando.item_selected_times[e.name] = 0
+		else
+			rando.fluid_selected_times[e.name] = 0
+		end
+
+		rando.total_things = rando.total_things + 1
+		rando.thing_number[thing_id] = rando.total_things
+	end
+end
+
+function rando.BFSStep(iter)
+	-- We have the following data:
+	--  hand.recipes -> rando.recipe_queue - recipes that are accessible to us
+	--  hand.items - craftable items
+
+	log("alive")
+
+	-- Cheat. Better method TBD
+	for item, _ in pairs(hand.resource_scan) do
+		rando.thing_automatable["item:" .. item] = true
+	end
+
+	-- Update lab pack status, because apparently you cannot research anything if you crafted tech packs before placing a lab
+	for item, itemdata in pairs(hand.itemscan) do
+		if (type(itemdata) == "table" and itemdata.labpack == false and hand.labslots[item]) then
+			itemdata.labpack = true 
+			logic.PushLabPack(proto.RawItem(item))
+		end
+	end
+
+	if (table_size(rando.recipe_queue) == 0) then
+		for k, e in pairs(rando.unaffordable_recipe_queue) do
+			if (not rando.queued[e.name] and logic.CanAffordRecipe(e) and logic.CanCraftRecipe(e)) then
+				rando.queued[e.name] = true
+				table.insert(rando.recipe_queue, e)
+			end
+		end
+
+		if (table_size(rando.recipe_queue) == 0) then
+			-- logic.debug()
+			return true
+		end
+	end
+
+	-- Pick a random recipe.
+	local recipe_id = math.random(1, table_size(rando.recipe_queue))
+	local rcp = rando.recipe_queue[recipe_id]
+	table.remove(rando.recipe_queue, recipe_id)
+
+	-- Determine if the recipe result is usually automatable
+	local is_automatable = true
+	local ings = proto.Ingredients(rcp)
+	for k, v in pairs(ings) do
+		local ing = proto.Ingredient(v)
+		if (not rando.thing_automatable[ing.type .. ":" .. ing.name]) then
+			is_automatable = false
+		end
+	end
+
+	rando.used_one_ingredient_recipes[rcp.category or "crafting"] = rando.used_one_ingredient_recipes[rcp.category or "crafting"] or {}
+
+	-- Calculate base cost of a recipe
+	local base_cost = 0
+	for k, v in pairs(ings) do
+		local ing = proto.Ingredient(v)
+		base_cost = base_cost + rando.thing_cost[ing.type .. ":" .. ing.name] * ing.amount
+	end
+
+	-- Collect items/fluids with their weights
+	local weights = {item = {}, fluid = {}}
+	local weight_sum = {item = 0, fluid = 0}
+
+	for _, cat in pairs({"item", "fluid"}) do
+		for v, x in pairs(hand[cat .. "s"]) do
+			-- If the recipe is automatable but item is not, don't include it
+			if (not (is_automatable and not rando.thing_automatable[cat .. ":" .. v])) then
+				-- If the recipe is one-ingredient and the item is already used as one, don't include it
+				if (not (table_size(ings) == 1 and rando.used_one_ingredient_recipes[rcp.category or "crafting"][cat .. ":" .. v])) then
+					-- If the item is too expensive, ignore it
+					if (rando.thing_cost[cat .. ":" .. v] <= base_cost) then
+						weights[cat][v] = 3 + rando[cat .. "_selected_times"][v]
+						-- If the item is a raw resource, ignore this
+						if (rando.is_raw_resource[cat .. ":" .. v]) then
+							weights[cat][v] = 1
+						end
+
+						weight_sum[cat] = weight_sum[cat] + weights[cat][v]
+					end
+				end
+			end
+		end
+	end
+
+	-- Check that we actually have enough items to randomize
+	local recipe_ings = {item = 0, fluid = 0}
+
+	for k, v in pairs(ings) do
+		local ing = proto.Ingredient(v)
+		recipe_ings[ing.type] = recipe_ings[ing.type] + 1
+	end
+
+	if (recipe_ings.item <= table_size(weights.item) and recipe_ings.fluid <= table_size(weights.fluid)) then
+		-- Randomize the recipe
+		local new_ings = {}
+		for k, v in pairs(ings) do
+			local ing = proto.Ingredient(v)
+			local wrand = math.random(1, weight_sum[ing.type])
+			local picked_ing = nil
+			for elem, wt in pairs(weights[ing.type]) do
+				if (wt) then
+					wrand = wrand - wt
+					if (wrand <= 0) then
+						picked_ing = elem
+						weight_sum[ing.type] = weight_sum[ing.type] - wt
+						weights[ing.type][picked_ing] = nil
+						break
+					end
+				end
+			end
+			local new_ing = table.deepcopy(ing)
+			new_ing.name = picked_ing
+			-- Reduce count a bit
+			new_ing.amount = math.min(new_ing.amount, math.max(1, math.ceil(base_cost / rando.thing_cost[new_ing.type .. ":" .. new_ing.name])))
+			table.insert(new_ings, new_ing)
+		end
+
+		-- Check if this recipe would be automatable
+		is_automatable = true
+		for k, ing in pairs(new_ings) do
+			if (not rando.thing_automatable[ing.type .. ":" .. ing.name]) then
+				is_automatable = false
+			end
+		end
+
+		-- Calculate the current cost of a recipe
+		local current_cost = 0
+		for k, ing in pairs(new_ings) do
+			current_cost = current_cost + rando.thing_cost[ing.type .. ":" .. ing.name] * ing.amount
+		end
+
+		local crafting_time_multiplier = current_cost / base_cost
+
+		-- Modify result count based on base_cost and current_cost (result is between 1 and stack size)
+		local new_results = {}
+		for k, v in pairs(proto.Results(rcp)) do
+			local res = proto.Result(v)
+			local new_res = table.deepcopy(res)
+			if (base_cost > 0 and current_cost > 0) then
+				-- Get item stack size
+				local stack_size = 10000
+				if ((res.type or "item") == "item") then
+					local item = proto.RawItem(res.name)
+					if item then
+						stack_size = item.stack_size
+					end
+				end
+				for _, key in pairs({"amount", "amount_min", "amount_max"}) do
+					if (new_res[key] and new_res[key] > 0) then
+						local new_result = math.max(1, math.min(stack_size, math.floor(new_res[key] * current_cost / base_cost + 0.5)))
+						crafting_time_multiplier = math.min(crafting_time_multiplier, new_result / new_res[key])
+						new_res[key] = new_result
+					end
+				end
+			end
+			table.insert(new_results, new_res)
+		end
+
+		-- Rewrite stuff
+		if (rcp.ingredients) then
+			rcp.ingredients = table.deepcopy(new_ings)
+		end
+		if (rcp.result) then
+			rcp.result = new_results[1].name
+			rcp.result_count = new_results[1].amount
+		end
+		if (rcp.results) then
+			rcp.results = table.deepcopy(new_results)
+		end
+		rcp.energy_required = math.max(1, math.min(100000, math.floor((rcp.energy_required or 0.5) * crafting_time_multiplier * 10 + 0.5))) / 10.0
+
+		if (rcp.normal) then
+			if (rcp.normal.ingredients) then
+				rcp.normal.ingredients = table.deepcopy(new_ings)
+			end
+			if (rcp.normal.result) then
+				rcp.normal.result = new_results[1].name
+				rcp.normal.result_count = new_results[1].amount
+			end
+			if (rcp.normal.results) then
+				rcp.normal.results = table.deepcopy(new_results)
+			end
+			rcp.normal.energy_required = math.floor((rcp.normal.energy_required or 0.5) * current_cost / base_cost * 10 + 0.5) / 10.0
+		end
+
+		if (rcp.expensive) then
+			if (rcp.expensive.ingredients) then
+				rcp.expensive.ingredients = table.deepcopy(new_ings)
+			end
+			if (rcp.expensive.result) then
+				rcp.expensive.result = new_results[1].name
+				rcp.expensive.result_count = new_results[1].amount
+			end
+			if (rcp.expensive.results) then
+				rcp.expensive.results = table.deepcopy(new_results)
+			end
+			rcp.expensive.energy_required = math.floor((rcp.expensive.energy_required or 0.5) * current_cost / base_cost * 10 + 0.5) / 10.0
+		end
+
+		base_cost = current_cost
+
+		log("Randomized recipe " .. rcp.name .. ".")
+		log("New ingredients:")
+		for k, ing in pairs(proto.Ingredients(rcp)) do
+			log("  " .. ing.type .. ":" .. ing.name .. " - " .. ing.amount)
+		end	
+		if (is_automatable) then
+			log("Automatable")
+		end
+		log("")
+	end
+
+	-- Update ingredient participation
+	for k, v in pairs(proto.Ingredients(rcp)) do
+		local ing = proto.Ingredient(v)
+		rando[ing.type .. "_selected_times"][ing.name] = (rando[ing.type .. "_selected_times"][ing.name] or 0) + 1
+		if (recipe_ings.item + recipe_ings.fluid == 1) then
+			rando.used_one_ingredient_recipes[rcp.category or "crafting"][ing.type .. ":" .. ing.name] = true
+		end
+	end
+
+	-- Update result costs
+	for k, v in pairs(proto.Results(rcp)) do
+		local res = proto.Result(v)
+		local res_amt = res.amount
+		if (not res_amt) then
+			res_amt = (res.amount_min + res.amount_max) / 2.0
+		end
+		if (res.probability) then
+			res_amt = res_amt * res.probability
+		end
+
+		local res_id = (res.type or "item") .. ":" .. res.name
+
+		if (rando.thing_cost[res_id] == nil) then
+			rando.thing_cost[res_id] = base_cost / res_amt
+		end
+		if (rando.thing_automatable[res_id] == nil) then
+			rando.thing_automatable[res_id] = is_automatable
+		end
+
+		if (is_automatable and not rando.thing_automatable[res_id]) then
+			rando.thing_automatable[res_id] = true
+			rando.thing_cost[res_id] = base_cost / res_amt
+		end
+		if ((is_automatable or not rando.thing_automatable[res_id]) and base_cost / res_amt < rando.thing_cost[res_id]) then
+			rando.thing_cost[res_id] = base_cost / res_amt
+		end
+	end
+
+	logic.ScanRecipe(rcp, true)
+
+	-- Scan cycle
+	logic.ScanTechnologies()
+	logic.ScanEntities()
+	logic.ScanResources()
+
+	-- Also unlock technologies manually, because it only checks hand
+	for k,v in pairs(data.raw.technology) do
+		if(not hand.techscan[v.name] and logic.CanResearchTechnology(v) and logic.CanAffordTechnology(v))then
+			logic.PushTechnology(v) logic.ScanTechnology(v)
+		end
+	end
+
+	-- Check waiting recipe availability
+	for k, e in pairs(rando.unaffordable_recipe_queue) do
+		if (not rando.queued[e.name] and logic.CanAffordRecipe(e) and logic.CanCraftRecipe(e)) then
+			rando.queued[e.name] = true
+			table.insert(rando.recipe_queue, e)
+		end
+	end
+end
+
+--== END REWRITE ==--
+
 function rando.InitLogic()
 	if(mods["SeaBlock"])then logic.Seablock() end
 	logic.lua()
@@ -377,7 +704,8 @@ function rando.InitLogic()
 end
 rando.InitLogic()
 
-logic.Walk(rando.WalkCondition,rando.WalkAction,4000)
+-- logic.Walk(rando.WalkCondition,rando.WalkAction,4000)
+logic.Walk(rando.WalkCondition,rando.BFSStep,40000)
 
 
 --logic.debug("Roll Finished")
