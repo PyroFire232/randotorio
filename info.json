@@ -5,6 +5,6 @@
 	"author": "PyroFire",
 	"dependencies": ["base >= 0.18","? SeaBlock","? spaceblock"],
 	"description": "Factorio but every recipe is randomized",
-	"factorio_version": "0.18",
+	"factorio_version": "1.1",
 	"homepage":"none"
 }
