@@ -429,14 +429,6 @@ function rando.BFSStep(iter)
 		rando.thing_automatable["item:" .. item] = true
 	end
 
-	-- Update lab pack status, because apparently you cannot research anything if you crafted tech packs before placing a lab
-	for item, itemdata in pairs(hand.itemscan) do
-		if (type(itemdata) == "table" and itemdata.labpack == false and hand.labslots[item]) then
-			itemdata.labpack = true 
-			logic.PushLabPack(proto.RawItem(item))
-		end
-	end
-
 	if (table_size(rando.recipe_queue) == 0) then
 		for k, e in pairs(rando.unaffordable_recipe_queue) do
 			if (not rando.queued[e.name] and logic.CanAffordRecipe(e) and logic.CanCraftRecipe(e)) then
@@ -672,6 +664,14 @@ function rando.BFSStep(iter)
 	logic.ScanTechnologies()
 	logic.ScanEntities()
 	logic.ScanResources()
+
+	-- Update lab pack status, because apparently you cannot research anything if you crafted tech packs before placing a lab
+	for item, itemdata in pairs(hand.itemscan) do
+		if (type(itemdata) == "table" and itemdata.labpack == false and hand.labslots[item]) then
+			itemdata.labpack = true 
+			logic.PushLabPack(proto.RawItem(item))
+		end
+	end
 
 	-- Also unlock technologies manually, because it only checks hand
 	for k,v in pairs(data.raw.technology) do
